@@ -23,23 +23,32 @@
 #include "addons/RTDBHelper.h"
 
 // Network credentials
-#define WIFI_SSID "SSID"
-#define WIFI_PASSWORD "PASS"
+#define WIFI_SSID "SECRET"
+#define WIFI_PASSWORD "SECRET"
 
 // Firebase API Key (Project Settings -> Web API Key)
-#define API_KEY "KEY"
+#define API_KEY "SECRET"
 
 // URL of the Realtime Database
-#define DATABASE_URL "URL" 
+#define DATABASE_URL "SECRET" 
 
 //Number of millis between updates
 #define UPDATE_DELAY 10000
 
-//Number of millis between sends 
+//Min. number of millis between sends 
 #define SEND_DELAY 5000
 
 //Duration (in millis) to allow a light to stay on
 #define LIGHT_DURATION 120000
+
+//Number of colors
+#define NUM_COLORS 3
+
+//Pins
+#define RED_PIN 15
+#define GREEN_PIN 12
+#define BLUE_PIN 14
+#define SENSOR_PIN 4
 
 //Firebase objs
 FirebaseData fb_data;
@@ -47,31 +56,33 @@ FirebaseAuth fb_auth;
 FirebaseConfig fb_config;
 
 //Program values
-unsigned long millisLastUpdated = 0;
-unsigned long millisLastSent = 0;
-unsigned long millisLastPondered = 0;
-int count = 0;
-bool signupOK = false;
+unsigned long timeLastUpdated = 0;
+unsigned long timeLastSent = 0;
 
-//Color values
-uint8_t red = 0;
-uint8_t blue = 0;
-uint8_t green = 0;
-int prevRed = 0, prevGreen = 0, prevBlue = 0;
-int redLastSeen = 0, greenLastSeen = 0, blueLastSeen = 0;
+//A struct to store data for each of red, green, and blue
+typedef struct color {
+  String id;
+  long timeLastActivated;
+  bool isOn;
+  uint8_t pin;
+} Color;
 
-//Pins
-const uint8_t RED_PIN = 15;
-const uint8_t GREEN_PIN = 12;
-const uint8_t BLUE_PIN = 14;
-const uint8_t SENSOR_PIN = 4;
+//Save the colors as structs for easy access with loops
+Color red{"r", 0, false, RED_PIN};
+Color green{"g", 0, false, GREEN_PIN};
+Color blue{"b", 0, false, BLUE_PIN};
+Color colors[3] = {red, green, blue};
+Color myColor = red;
 
 
 void setup(){
+  //Pin modes
   pinMode(SENSOR_PIN, INPUT);
   pinMode(RED_PIN, OUTPUT);
   pinMode(GREEN_PIN, OUTPUT);
   pinMode(BLUE_PIN, OUTPUT);
+
+  //Connect to WiFi
   Serial.begin(115200);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to Wi-Fi");
@@ -84,17 +95,14 @@ void setup(){
   Serial.println(WiFi.localIP());
   Serial.println();
 
-  /* Assign the api key (required) */
-  fb_config.api_key = API_KEY;
+  //Set up Firebase credentials
+  fb_config.api_key = API_KEY; /* Assign the api key (required) */
+  fb_config.database_url = DATABASE_URL; /* Assign the RTDB URL (required) */
 
-  /* Assign the RTDB URL (required) */
-  fb_config.database_url = DATABASE_URL;
-
-  /* Sign up */
+  //Sign in to Firebase
   Serial.println("Signing into Firebase...");
   if (Firebase.signUp(&fb_config, &fb_auth, "", "")){
     Serial.println("Success!");
-    signupOK = true;
   } else {
     Serial.println("Firebase sign-in failed.");
     Serial.printf("%s\n", fb_config.signer.signupError.message.c_str());
@@ -102,7 +110,8 @@ void setup(){
 
   /* Assign the callback function for the long running token generation task */
   fb_config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
-  
+
+  //Begin Firebase
   Firebase.begin(&fb_config, &fb_auth);
   Firebase.reconnectWiFi(true);
 }
@@ -110,9 +119,8 @@ void setup(){
 
 void loop(){
   //Update if enough time has passed
-  if(millis() - millisLastUpdated > UPDATE_DELAY){
-    updateColor();
-    millisLastUpdated = millis();
+  if(checkDelay(timeLastUpdated, UPDATE_DELAY)){
+    updateDisplay();
   }
 
   //Detect pondering
@@ -121,58 +129,66 @@ void loop(){
     onPonder();
   }
 
+  //Turn off any colors that need to be turned off
   checkColorsForTurnoff();
 }
 
 
-void updateColor(){
-  int updatedRed = getColor("r");
-  int updatedGreen = getColor("g");
-  int updatedBlue = getColor("b");
-  if(updatedRed && redLastSeen <= 0){
-    Serial.println("Red updated");
-    redLastSeen = millis();
+/**
+ * Gets updated color values from Firebase and updates the orb's display
+ */
+void updateDisplay(){
+  Serial.print("Updating... ");
+  for(int i = 0; i < NUM_COLORS; i++){
+    //Get the updated color
+    int updatedColor = getColor(colors[i].id);
+    Serial.print(colors[i].id);
+    Serial.print(updatedColor);
+    Serial.print(" ");
+
+    //If this color was just turned on and was not on before...
+    if(updatedColor && !colors[i].isOn){
+      //Update the timeLastActivated
+      colors[i].timeLastActivated = millis();
+    }
+    
+    //Update this color's "isOn" status
+    colors[i].isOn = (updatedColor > 0);
+
+    //Update the display for this color
+    digitalWrite(colors[i].pin, colors[i].isOn);
   }
-  if(updatedGreen && greenLastSeen <= 0){
-    Serial.println("Green updated");
-    greenLastSeen = millis();
-  }
-  if(updatedBlue && blueLastSeen <= 0){
-    Serial.println("Blue updated");
-    blueLastSeen = millis();
-  }
-  fadeRGB(updatedRed, updatedGreen, updatedBlue);
+  Serial.println();
+  timeLastUpdated = millis();
 }
 
 
+/**
+ * Callback for the activation of the orb - 
+ * Activates the color of this orb in the database
+ */
 void onPonder(){
-  millisLastPondered = millis();
-  //Update this orb's color
-  if(red){
-    fadeRGB(red, prevGreen, prevBlue);
-    if (sendColor(1, "r")){
-      Serial.println("Successfully sent RED");
-    }
-  }
-  if(green){
-    fadeRGB(prevRed, green, prevBlue);
-    if (sendColor(1, "g")){
-      Serial.println("Successfully sent GREEN");
-    }
-  }
-  if(blue){
-    fadeRGB(prevRed, prevGreen, blue);
-    if (sendColor(1, "b")){
-      Serial.println("Successfully sent BLUE");
-    }
+  //Activate this orb's color in the database
+  if(setColor(1, myColor.id)){
+    //Force an update from database
+    updateDisplay();
+    Serial.println("Successfully sent color");
   }
 }
 
 
-bool sendColor(int color, String colorId){
-  if((millis() - millisLastSent) > SEND_DELAY){
-    millisLastSent = millis();
-    return (Firebase.RTDB.setInt(&fb_data, "c/" + colorId, color));
+/**
+ * Send the given value for the given color to the database
+ * 
+ * Returns false on failure or if the appropriate delay has not been satisfied, true otherwise.
+ */
+bool setColor(int value, String id){
+  if(checkDelay(timeLastSent, SEND_DELAY)){
+    timeLastSent = millis();
+    Serial.print("Sending ");
+    Serial.print(id);
+    Serial.println(value);
+    return (Firebase.RTDB.setInt(&fb_data, "c/" + id, value));
   }
   return false;
 }
@@ -181,7 +197,7 @@ bool sendColor(int color, String colorId){
 int getColor(String colorId){
   if (Firebase.RTDB.getInt(&fb_data, "/c/" + colorId)) {
     if (fb_data.dataType() == "int") {
-      return fb_data.intData() * 255;
+      return fb_data.intData();
     }
   }
   return -1;
@@ -192,25 +208,15 @@ int getColor(String colorId){
  * Turn off any light that has been on for longer than the specified duration
  */
 void checkColorsForTurnoff(){
-  //Red
-  if(redLastSeen > 0 && millis() - redLastSeen > LIGHT_DURATION){
-    Serial.println("Turning off red");
-    sendColor(0, "r");
-    redLastSeen = 0;
-  }
-
-  //Green
-  if(greenLastSeen > 0 && millis() - greenLastSeen > LIGHT_DURATION){
-    Serial.println("Turning off green");
-    sendColor(0, "g");
-    greenLastSeen = 0;
-  }
-
-  //Blue
-  if(blueLastSeen > 0 && millis() - blueLastSeen > LIGHT_DURATION){
-    Serial.println("Turning off blue");
-    sendColor(0, "b");
-    blueLastSeen = 0;
+  for(int i = 0; i < NUM_COLORS; i++){
+    if(colors[i].isOn && checkDelay(colors[i].timeLastActivated, LIGHT_DURATION)){
+      Serial.print("Turning off ");
+      Serial.println(colors[i].id);
+      if(setColor(0, colors[i].id)){
+        Serial.println("Turnoff successful");
+        colors[i].isOn = false;
+      }
+    }
   }
 }
 
@@ -218,33 +224,42 @@ void checkColorsForTurnoff(){
 /**
  * Fades into the specified RGB color values
  */
-void fadeRGB(int redVal, int greenVal, int blueVal){
-  //Calculate intervals for fading
-  double redInterval = ((double)redVal - (double)prevRed) / 255.0;
-  double greenInterval = ((double)greenVal - (double)prevGreen) / 255.0;
-  double blueInterval = ((double)blueVal - (double)prevBlue) / 255.0;
-  double red = prevRed, green = prevGreen, blue = prevBlue;
+//void fadeRGB(int redVal, int greenVal, int blueVal){
+//  //Calculate intervals for fading
+//  double redInterval = ((double)redVal - (double)prevRed) / 255.0;
+//  double greenInterval = ((double)greenVal - (double)prevGreen) / 255.0;
+//  double blueInterval = ((double)blueVal - (double)prevBlue) / 255.0;
+//  double red = prevRed, green = prevGreen, blue = prevBlue;
+//
+//  //Fade into new color
+//  for(int i = 0; i < 255; i++){
+//    red += redInterval;
+//    green += greenInterval;
+//    blue += blueInterval;
+//
+//    //Set values to LED
+//    analogWrite(RED_PIN, map(red, 0, 255, 0, 1023));
+//    analogWrite(GREEN_PIN, map(green, 0, 255, 0, 1023));
+//    analogWrite(BLUE_PIN, map(blue, 0, 255, 0, 1023));
+//
+//    delay(1);
+//  }
+//
+//  prevRed = redVal;
+//  prevGreen = greenVal;
+//  prevBlue = blueVal;
+//  
+//  //Set values to LED
+//  analogWrite(RED_PIN, map(redVal, 0, 255, 0, 1023));
+//  analogWrite(GREEN_PIN, map(greenVal, 0, 255, 0, 1023));
+//  analogWrite(BLUE_PIN, map(blueVal, 0, 255, 0, 1023));
+//}
 
-  //Fade into new color
-  for(int i = 0; i < 255; i++){
-    red += redInterval;
-    green += greenInterval;
-    blue += blueInterval;
 
-    //Set values to LED
-    analogWrite(RED_PIN, map(red, 0, 255, 0, 1023));
-    analogWrite(GREEN_PIN, map(green, 0, 255, 0, 1023));
-    analogWrite(BLUE_PIN, map(blue, 0, 255, 0, 1023));
-
-    delay(1);
-  }
-
-  prevRed = redVal;
-  prevGreen = greenVal;
-  prevBlue = blueVal;
-  
-  //Set values to LED
-  analogWrite(RED_PIN, map(redVal, 0, 255, 0, 1023));
-  analogWrite(GREEN_PIN, map(greenVal, 0, 255, 0, 1023));
-  analogWrite(BLUE_PIN, map(blueVal, 0, 255, 0, 1023));
+/**
+ * Returns <true> if at least <maxDelay> millis have passed since the 
+ * time specified by <startTime>
+ */
+bool checkDelay(long startTime, long maxDelay){
+  return millis() - startTime >= maxDelay;
 }
