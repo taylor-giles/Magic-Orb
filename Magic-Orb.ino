@@ -144,18 +144,29 @@ void updateDisplay(){
     int updatedColor = getColor(colors[i].id);
     Serial.print(colors[i].id);
     Serial.print(updatedColor);
+    Serial.print(colors[i].isOn);
     Serial.print(" ");
 
     //If this color was just turned on and was not on before...
-    if(updatedColor && !colors[i].isOn){
+    if(updatedColor > 0 && !colors[i].isOn){
       //Update the timeLastActivated
       colors[i].timeLastActivated = millis();
+
+      //Activate the light
+      activateColorDisplay(colors[i]);
+    }
+
+    //If this color was just turned off and was on before...
+    if(updatedColor <= 0 && colors[i].isOn){
+      //Deactivate the light
+      deactivateColorDisplay(colors[i]);
     }
     
     //Update this color's "isOn" status
     colors[i].isOn = (updatedColor > 0);
 
-    //Update the display for this color
+    //Ensure display is correct
+    //(Deactivate wont occur for colors that this orb turns off)
     digitalWrite(colors[i].pin, colors[i].isOn);
   }
   Serial.println();
@@ -194,6 +205,9 @@ bool setColor(int value, String id){
 }
 
 
+/**
+ * Queries Firebase for the latest value of the specified color
+ */
 int getColor(String colorId){
   if (Firebase.RTDB.getInt(&fb_data, "/c/" + colorId)) {
     if (fb_data.dataType() == "int") {
@@ -222,38 +236,24 @@ void checkColorsForTurnoff(){
 
 
 /**
- * Fades into the specified RGB color values
+ * Fades the specified color from "off" to "on"
  */
-//void fadeRGB(int redVal, int greenVal, int blueVal){
-//  //Calculate intervals for fading
-//  double redInterval = ((double)redVal - (double)prevRed) / 255.0;
-//  double greenInterval = ((double)greenVal - (double)prevGreen) / 255.0;
-//  double blueInterval = ((double)blueVal - (double)prevBlue) / 255.0;
-//  double red = prevRed, green = prevGreen, blue = prevBlue;
-//
-//  //Fade into new color
-//  for(int i = 0; i < 255; i++){
-//    red += redInterval;
-//    green += greenInterval;
-//    blue += blueInterval;
-//
-//    //Set values to LED
-//    analogWrite(RED_PIN, map(red, 0, 255, 0, 1023));
-//    analogWrite(GREEN_PIN, map(green, 0, 255, 0, 1023));
-//    analogWrite(BLUE_PIN, map(blue, 0, 255, 0, 1023));
-//
-//    delay(1);
-//  }
-//
-//  prevRed = redVal;
-//  prevGreen = greenVal;
-//  prevBlue = blueVal;
-//  
-//  //Set values to LED
-//  analogWrite(RED_PIN, map(redVal, 0, 255, 0, 1023));
-//  analogWrite(GREEN_PIN, map(greenVal, 0, 255, 0, 1023));
-//  analogWrite(BLUE_PIN, map(blueVal, 0, 255, 0, 1023));
-//}
+void activateColorDisplay(Color color){
+  for(int i = 0; i < 256; i++){
+    analogWrite(color.pin, i);
+    delay(1);  //Duration of animation = 256ms
+  }
+}
+
+/**
+ * Fades the specified color from "on" to "off"
+ */
+void deactivateColorDisplay(Color color){
+  for(int i = 255; i >= 0; i--){
+    analogWrite(color.pin, i);
+    delay(1);  //Duration of animation = 256ms
+  }
+}
 
 
 /**
