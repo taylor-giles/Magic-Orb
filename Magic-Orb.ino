@@ -22,9 +22,12 @@
 //Provide the RTDB payload printing info and other helper functions.
 #include "addons/RTDBHelper.h"
 
-// Network credentials
-#define WIFI_SSID "SECRET"
-#define WIFI_PASSWORD "SECRET"
+//Library for getting WiFi credentials automatically from AP webpage
+#include <WiFiManager.h>
+
+// Credentials for WiFiManager Access Point (for config page)
+#define WM_SSID "SECRET"
+#define WM_PASSWORD "SECRET"
 
 // Firebase API Key (Project Settings -> Web API Key)
 #define API_KEY "SECRET"
@@ -59,6 +62,12 @@ FirebaseConfig fb_config;
 unsigned long timeLastUpdated = 0;
 unsigned long timeLastSent = 0;
 
+//WiFiManager-related values
+bool isConnected = false;
+unsigned long timeLastBlinked = 0;
+bool isBlinkOn = false;
+const int BLINK_DELAY = 1000; //ms between blinks
+
 //A struct to store data for each of red, green, and blue
 typedef struct color {
   String id;
@@ -72,65 +81,79 @@ Color red{"r", 0, false, RED_PIN};
 Color green{"g", 0, false, GREEN_PIN};
 Color blue{"b", 0, false, BLUE_PIN};
 Color colors[3] = {red, green, blue};
-Color myColor = red;
+Color myColor = blue;
+
+//WiFi Manager
+WiFiManager wifiManager;
 
 
 void setup(){
   //Pin modes
   pinMode(SENSOR_PIN, INPUT);
-  pinMode(RED_PIN, OUTPUT);
-  pinMode(GREEN_PIN, OUTPUT);
-  pinMode(BLUE_PIN, OUTPUT);
-
-  //Connect to WiFi
+  for(int i = 0; i < 3; i++){
+    pinMode(colors[i].pin, OUTPUT);
+    digitalWrite(colors[i].pin, LOW);
+  }
   Serial.begin(115200);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED){
-    Serial.print(".");
-    delay(300);
-  }
-  Serial.println();
-  Serial.print("Connected with IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.println();
 
-  //Set up Firebase credentials
-  fb_config.api_key = API_KEY; /* Assign the api key (required) */
-  fb_config.database_url = DATABASE_URL; /* Assign the RTDB URL (required) */
-
-  //Sign in to Firebase
-  Serial.println("Signing into Firebase...");
-  if (Firebase.signUp(&fb_config, &fb_auth, "", "")){
-    Serial.println("Success!");
+  //Connect to WiFi using saved credentials. If connection fails, open config page with AP
+  wifiManager.setConfigPortalBlocking(false);
+  isConnected = wifiManager.autoConnect(WM_SSID, WM_PASSWORD);
+  if(isConnected){
+    //Set up Firebase credentials
+    fb_config.api_key = API_KEY; /* Assign the api key (required) */
+    fb_config.database_url = DATABASE_URL; /* Assign the RTDB URL (required) */
+  
+    //Sign in to Firebase
+    Serial.println("Signing into Firebase...");
+    if (Firebase.signUp(&fb_config, &fb_auth, "", "")){
+      Serial.println("Success!");
+      /* Assign the callback function for the long running token generation task */
+      fb_config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
+    
+      //Begin Firebase
+      Firebase.begin(&fb_config, &fb_auth);
+      Firebase.reconnectWiFi(true);
+    } else {
+      isConnected = false;
+      Serial.println("Firebase sign-in failed.");
+      Serial.printf("%s\n", fb_config.signer.signupError.message.c_str());
+    }
   } else {
-    Serial.println("Firebase sign-in failed.");
-    Serial.printf("%s\n", fb_config.signer.signupError.message.c_str());
+    Serial.println("Connection failed.");
+    Serial.println("Starting config page with AP...");
   }
-
-  /* Assign the callback function for the long running token generation task */
-  fb_config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
-
-  //Begin Firebase
-  Firebase.begin(&fb_config, &fb_auth);
-  Firebase.reconnectWiFi(true);
 }
 
 
 void loop(){
-  //Update if enough time has passed
-  if(checkDelay(timeLastUpdated, UPDATE_DELAY)){
-    updateDisplay();
-  }
+  if(isConnected){
+    //Update if enough time has passed
+    if(checkDelay(timeLastUpdated, UPDATE_DELAY)){
+      updateDisplay();
+    }
+  
+    //Detect pondering
+    if(digitalRead(SENSOR_PIN) == HIGH){
+      Serial.println("Motion detected.");
+      onPonder();
+    }
+  
+    //Turn off any colors that need to be turned off
+    checkColorsForTurnoff();
+  } else {
+    //WifiManager config portal processing
+    if(wifiManager.process()){
+      ESP.restart();
+    }
 
-  //Detect pondering
-  if(digitalRead(SENSOR_PIN) == HIGH){
-    Serial.println("Motion detected.");
-    onPonder();
+    //Blink the red LED
+    if(checkDelay(timeLastBlinked, BLINK_DELAY)){
+      timeLastBlinked = millis();
+      digitalWrite(red.pin, isBlinkOn);
+      isBlinkOn = !isBlinkOn;
+    }
   }
-
-  //Turn off any colors that need to be turned off
-  checkColorsForTurnoff();
 }
 
 
@@ -147,7 +170,7 @@ void updateDisplay(){
     Serial.print(colors[i].isOn);
     Serial.print(" ");
 
-    //If this color was just turned on and was not on before...
+    //If this color was just turned on and was off before...
     if(updatedColor > 0 && !colors[i].isOn){
       //Update the timeLastActivated
       colors[i].timeLastActivated = millis();
@@ -165,8 +188,7 @@ void updateDisplay(){
     //Update this color's "isOn" status
     colors[i].isOn = (updatedColor > 0);
 
-    //Ensure display is correct
-    //(Deactivate wont occur for colors that this orb turns off)
+    //Ensure display is correct (in case of fade failure (analog issues, etc.))
     digitalWrite(colors[i].pin, colors[i].isOn);
   }
   Serial.println();
@@ -228,6 +250,7 @@ void checkColorsForTurnoff(){
       Serial.println(colors[i].id);
       if(setColor(0, colors[i].id)){
         Serial.println("Turnoff successful");
+        deactivateColorDisplay(colors[i]);
         colors[i].isOn = false;
       }
     }
@@ -257,8 +280,8 @@ void deactivateColorDisplay(Color color){
 
 
 /**
- * Returns <true> if at least <maxDelay> millis have passed since the 
- * time specified by <startTime>
+ * Returns true if at least <maxDelay> millis have passed since the 
+ * time specified by <startTime>, false otherwise
  */
 bool checkDelay(long startTime, long maxDelay){
   return millis() - startTime >= maxDelay;
