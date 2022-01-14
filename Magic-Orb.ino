@@ -48,10 +48,13 @@
 #define NUM_COLORS 3
 
 //Pins
-#define RED_PIN 15
-#define GREEN_PIN 12
-#define BLUE_PIN 14
-#define SENSOR_PIN 4
+#define SENSOR_PIN 5
+#define RED_PIN 4
+#define GREEN_PIN 0
+#define BLUE_PIN 2
+#define SELECT_GREEN 14
+#define SELECT_OUTPUT 12
+#define SELECT_BLUE 13 
 
 //Firebase objs
 FirebaseData fb_data;
@@ -81,7 +84,7 @@ Color red{"r", 0, false, RED_PIN};
 Color green{"g", 0, false, GREEN_PIN};
 Color blue{"b", 0, false, BLUE_PIN};
 Color colors[3] = {red, green, blue};
-Color myColor = blue;
+Color myColor;
 
 //WiFi Manager
 WiFiManager wifiManager;
@@ -90,11 +93,29 @@ WiFiManager wifiManager;
 void setup(){
   //Pin modes
   pinMode(SENSOR_PIN, INPUT);
+  pinMode(SELECT_OUTPUT, OUTPUT);
+  pinMode(SELECT_GREEN, INPUT_PULLUP);
+  pinMode(SELECT_BLUE, INPUT_PULLUP);
   for(int i = 0; i < 3; i++){
     pinMode(colors[i].pin, OUTPUT);
     digitalWrite(colors[i].pin, LOW);
   }
   Serial.begin(115200);
+  Serial.println();
+
+  //Determine which color this orb uses
+  digitalWrite(SELECT_OUTPUT, LOW);
+  delay(10);
+  myColor = red;
+  Serial.print(digitalRead(SELECT_GREEN));
+  Serial.println(digitalRead(SELECT_BLUE));
+  if(digitalRead(SELECT_GREEN) == LOW){
+    myColor = green;
+  } else if(digitalRead(SELECT_BLUE) == LOW){
+    myColor = blue;
+  }
+  Serial.print("Chosen color: ");
+  Serial.println(myColor.id);
 
   //Connect to WiFi using saved credentials. If connection fails, open config page with AP
   wifiManager.setConfigPortalBlocking(false);
