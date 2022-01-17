@@ -48,13 +48,12 @@
 #define NUM_COLORS 3
 
 //Pins
-#define SENSOR_PIN 5
-#define RED_PIN 4
-#define GREEN_PIN 0
-#define BLUE_PIN 2
-#define SELECT_GREEN 14
-#define SELECT_OUTPUT 12
-#define SELECT_BLUE 13 
+#define RED_PIN 5       //D1
+#define GREEN_PIN 4     //D2
+#define BLUE_PIN 0      //D3
+#define SELECT_GREEN 14 //D5
+#define SELECT_BLUE 12  //D6
+#define SENSOR_PIN 13   //D7
 
 //Firebase objs
 FirebaseData fb_data;
@@ -93,7 +92,6 @@ WiFiManager wifiManager;
 void setup(){
   //Pin modes
   pinMode(SENSOR_PIN, INPUT);
-  pinMode(SELECT_OUTPUT, OUTPUT);
   pinMode(SELECT_GREEN, INPUT_PULLUP);
   pinMode(SELECT_BLUE, INPUT_PULLUP);
   for(int i = 0; i < 3; i++){
@@ -104,8 +102,6 @@ void setup(){
   Serial.println();
 
   //Determine which color this orb uses
-  digitalWrite(SELECT_OUTPUT, LOW);
-  delay(10);
   myColor = red;
   Serial.print(digitalRead(SELECT_GREEN));
   Serial.println(digitalRead(SELECT_BLUE));
