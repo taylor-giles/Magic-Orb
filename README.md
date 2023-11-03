@@ -1,6 +1,6 @@
 # Magic Crystal Orb
 Collaborators/Wizards - 
-[Taylor Giles](https://taylorgiles.me), [Anthony Piccinone](https://anthony.piccinone.com), [Joseph Romano](https://josephromanodesign.com/)
+[Taylor Giles](https://taylorgiles.me), [Anthony Piccinone](https://piccinone.com), [Joseph Romano](https://josephromanodesign.com/)
 
 ## Summary
 A set of three ESP8266-powered crystal orbs that light up together whenever a fellow "wizard" activates one. Each orb in the set is assigned a color - either red, green, or blue - and when an orb is activated, its color is added to the mixture, resulting in a mystical white when all three wizards are present at the same time.
